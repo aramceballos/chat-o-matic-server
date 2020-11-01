@@ -1,30 +1,58 @@
-import express from 'express';
-import { ApolloServer } from 'apollo-server-express';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { ApolloServer, gql, PubSub } from 'apollo-server';
 
-import resolvers from './lib/resolvers';
+const pubsub = new PubSub();
 
-const app = express();
+interface IMessage {
+  id: number;
+  user: string;
+  content: string;
+}
 
-const typeDefs = readFileSync(
-  join(__dirname, 'lib', 'schema.graphql'),
-  'utf-8',
-);
+const messages: IMessage[] = [];
 
-const server = new ApolloServer({
-  introspection: true,
-  playground: true,
-  typeDefs,
-  resolvers,
-});
+const typeDefs = gql`
+  type Message {
+    id: ID!
+    user: String!
+    content: String!
+  }
+  type Query {
+    messages: [Message!]
+  }
+  type Mutation {
+    postMessage(user: String!, content: String!): ID!
+  }
+  type Subscription {
+    messages: [Message!]
+  }
+`;
 
-server.applyMiddleware({ app, path: '/graphql' });
+const MESSAGE_ADDED = 'MESSAGE_ADDED';
 
-app.get('/test', (req, res) => {
-  res.send({ its: 'working' });
-});
+const resolvers = {
+  Query: {
+    messages: () => messages,
+  },
+  Mutation: {
+    postMessage: (_parent: any, { user, content }: IMessage) => {
+      const id = messages.length;
+      messages.push({
+        id,
+        user,
+        content,
+      });
+      pubsub.publish(MESSAGE_ADDED, { messages: messages });
+      return id;
+    },
+  },
+  Subscription: {
+    messages: {
+      subscribe: () => pubsub.asyncIterator([MESSAGE_ADDED]),
+    },
+  },
+};
 
-app.listen(5000, () => {
-  console.log('⚡️[server]: Server is running at http://localhost:5000');
+const server = new ApolloServer({ typeDefs, resolvers });
+server.listen().then(({ port }: any) => {
+  console.log(`Server on http://localhost:${port}/`);
 });
